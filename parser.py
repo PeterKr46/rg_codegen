@@ -12,6 +12,10 @@ class Node:
     def __str__(self):
         return  str(self.__dict__)
 
+class Image:
+    def __init__(self, node):
+        print("Created",str(type(self)), node.name)
+
 
 class Buffer:
     def __init__(self, node):
@@ -31,72 +35,137 @@ class VertexAttribute:
         if "format" in dir(node):
             self.format = node.format
 
+class Shader:
+    def __init__(self, node):
+        print("Created",str(type(self)), node.name)
 
-def parse_node(module='', graph_data=''):
-    used = count_ignorables(graph_data)
+class Asset:
+    def __init__(self, node):
+        print("Created",str(type(self)), node.name)
+
+class AccelerationStructure:
+    def __init__(self, node):
+        print("Created",str(type(self)), node.name)
+
+class Pipeline:
+    def __init__(self, node):
+        print("Created",str(type(self)), node.name)
+
+class DescriptorSet:
+    def __init__(self, node):
+        print("Created",str(type(self)), node.name)
+
+class RenderPass:
+    def __init__(self, node):
+        print("Created",str(type(self)), node.name)
 
 
-def parse_file(graph_path, module_prefix=""):
+
+class Graph:
+    def __init__(self):
+        self.v = "0.01"
+
+
+class Parser:
+    def __init__(self, rg_path, module_prefix = ""):
+        # .rg path
+        self.rg_path = rg_path
+        # vector of raw node data
+        self.rg_nodes = []
+        # map from node name to node data index
+        self.rg_map = {}
+        # a prefix to add in front of all resulting nodes
+        self.module_prefix = module_prefix
+        # Graph could be Assembled here.
+        self.graph = None
+
+    def maybe_create_node(self, node):
+        if self.graph:
+            if not "nodes_" + node.ntype in self.graph.__dict__.keys():
+                self.graph.__dict__["nodes_" + node.ntype] = []
+                self.graph.__dict__["map_" + node.ntype] = {}
+            self.graph.__dict__["map_" + node.ntype][node.name] = len(self.graph.__dict__["nodes_" + node.ntype])
+            # TODO might be dangerous.
+            self.graph.__dict__["nodes_" + node.ntype].append(None) 
+        self.rg_nodes.append(node)
+
+
+    def parse(self, assemble = True):
+        # Initialize empty graph if necessary.
+        self.graph = None if not assemble else Graph()
+
+        print("Parsing", self.rg_path)
+        # transform the file into a set of untyped Nodes
+        raw_nodes = tokenize_file(self.rg_path, self.module_prefix)
+        if not raw_nodes:
+            return
+        # iterate the Nodes
+        for (_, node) in raw_nodes.items():
+            # If the Node is a Module, it gets special handling.
+            if node.ntype == "Module":
+                if not "path" in dir(node):
+                    print("ERROR:\tModule {} is missing a path.\nFailed to parse.".format(node))
+                # Create a new Parser
+                module_parser = Parser(os.path.abspath(node.origin_directory + node.path), node.name + '/')
+                # Parse only the raw data from this one.
+                if not module_parser.parse(False):
+                    print("ERROR:\tModule {} could not be parsed properly.".format(node.path))
+                    return
+                # Iterate the nodes defined in this module
+                for module_node in module_parser.rg_nodes:
+                    # Duplicates are handled as errors
+                    if module_node.name in self.rg_map.keys():
+                        print("ERROR:\tDuplicate definition of {} {} in {}".format(module_parser.rg_nodes[node_idx].ntype, name, node.name))
+                        return
+                    else:
+                        # Insert newly typed node into own set.
+                        self.maybe_create_node(module_node)
+            else:
+                self.maybe_create_node(node)
+        # After we've successfully parsed all raw data, assemble if told to.
+        if assemble:
+            self.parse_nodes(Image)
+            self.parse_nodes(Buffer)
+            
+            self.parse_nodes(VertexAttribute)
+            self.parse_nodes(Shader)
+            
+            self.parse_nodes(Asset)
+            self.parse_nodes(AccelerationStructure)
+            self.parse_nodes(Pipeline)
+            self.parse_nodes(DescriptorSet)
+
+            self.parse_nodes(RenderPass)
+        return True
+               
+
+    def parse_nodes(self, ntype_t):
+        print("Building",ntype_t.__name__,"nodes...")
+        for node in self.rg_nodes:
+            if node.ntype == ntype_t.__name__:
+                img_idx = self.graph.__dict__["map_" + ntype_t.__name__][node.name]
+                self.graph.__dict__["nodes_" + ntype_t.__name__][img_idx] = ntype_t(node)
+
+def tokenize_file(graph_path, module_prefix=""):
     nodes = []
     # Open the base file for reading
     with open(graph_path) as graph_file:
         # Join the base file into a single string, stripping ignoreable characters
         full_graph = strip_ignoreables(''.join(graph_file.readlines()))
         # Parse the raw node information from the base file
-        raw_nodes = tokenize(full_graph, {}, module_prefix, os.path.dirname(graph_path) + '/')
-        
-        # While there are unprocessed modules
-        while "Module" in raw_nodes.keys():
-            # Collect them into a list and erase the entry
-            modules = [module for (name, module) in raw_nodes["Module"].items()]
-            del raw_nodes["Module"]
-            while modules:
-                # Pop the first one.
-                node = modules[0]
-                modules = modules[1:]
-                # ... it requires a path
-                if not node.path:
-                    print("ERROR:\tModule {name} is missing a path.\nFailed to parse.".format(node))
-                    return
-                # ... we're using said path to build an absolute one.
-                module_path = os.path.abspath(node.origin_directory + node.path)
-                # ... insert additional raw data at the front of the queue.
-                print("Including Module", node.name, "from", module_path, "...")
-                with open(module_path) as module_file:
-                    # Assemble the module file, stripping ignoreable characters
-                    module_graph = strip_ignoreables(''.join(module_file.readlines()))
-                    # Parse the raw node information from the module file
-                    raw_nodes = tokenize(module_graph, raw_nodes, node.name + '/', os.path.dirname(module_path) + '/')
-        
-        # Once all Modules are collected, assemble the resulting nodes
-        for (ntype, nodes) in raw_nodes.items():
-            if ntype == "DescriptorSet":
-                for name, node in nodes.items():
-                    print("Found DescriptorSet", node.name)
-            elif ntype == "Buffer":
-                buffers = {}
-                for name, node in nodes.items():
-                    buffers[name] = Buffer(node)
-                    print("Found Buffer", node.name)
-                nodes["Buffer"] = buffers
-            elif ntype == "VertexAttribute":
-                vertex_attributes = {}
-                for name, node in nodes.items():
-                    print("Found VertexAttribute", node.name)
-                    vertex_attributes[name] = VertexAttribute(node)
-                nodes["VertexAttribute"] = vertex_attributes
-            else:
-                print("Didn't recognize node type", ntype)
+        return tokenize(full_graph, module_prefix, os.path.dirname(graph_path) + '/')
+
 """
 full_graph is a rg string
 nodes is a dictionary {ntype -> { name -> node} }
 """
-def tokenize(full_graph, nodes = {}, module_prefix="", origin_directory=""):
+def tokenize(full_graph, module_prefix="", origin_directory=""):
     # Kept for debugging purposes - errors based on line number in RG
     d_lines = full_graph.split("\n")
     d_line_no = 0
     d_line_offset = 0
 
+    nodes = {}
     active_node = None
     # Number of characters consumed by last loop step
     consumed = 0
@@ -139,12 +208,10 @@ def tokenize(full_graph, nodes = {}, module_prefix="", origin_directory=""):
             # Node Type
             ntype = node_head.group(1)
             # Node Name
-            name = node_head.group(2)
+            name = module_prefix + node_head.group(2)
             # Key Pair
-            active_node = (ntype, module_prefix + name)
-            if not ntype in nodes.keys():
-                nodes[ntype] = {}
-            elif name in nodes[ntype].keys():
+            active_node = ntype + ":" + name
+            if name in nodes.keys():
                 print(
 "ERROR:\tInvalid syntax in render graph near line{}:\n\
 \t{}\n\
@@ -153,7 +220,7 @@ Duplicate definition of {} '{}'.".format(d_line_no + 1, d_lines[d_line_no], ' ' 
                 )
                 return
             # Append new Node to list of nodes
-            nodes[ntype][module_prefix + name] = Node(
+            nodes[active_node] = Node(
                     ntype=ntype,
                     name=name,
                     origin_directory=origin_directory
@@ -173,7 +240,7 @@ Attribute defined outside of node.\n\
 Failed to parse.".format(d_line_no + 1, d_lines[d_line_no], ' ' * d_line_offset))
                 return
             # Append attribute to current Node.
-            nodes[active_node[0]][active_node[1]].__dict__[node_attr.group(1)] = node_attr.group(2)
+            nodes[active_node].__dict__[node_attr.group(1)] = node_attr.group(2)
             continue
         print(
 "ERROR:\tInvalid syntax in render graph near line {}:\n\
@@ -190,12 +257,11 @@ def strip_ignoreables(graph_data):
             result += c
     return result
 
-def parse_graph(path):
-    path = os.path.abspath(path)
-    pf = parse_file(path)
-
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
     parser.add_argument('path', help='RenderGraph file path')
     args = parser.parse_args()
-    parse_graph(args.path)
+    rg_parser = Parser(args.path)
+    if rg_parser.parse():
+        for node in rg_parser.rg_nodes:
+            print(str(node))
